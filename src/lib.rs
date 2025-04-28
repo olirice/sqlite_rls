@@ -4,110 +4,103 @@
 //! It works by manipulating SQL Abstract Syntax Trees (ASTs) to apply security policies.
 
 pub mod ast;
+pub mod error;
 pub mod parser;
 pub mod policy;
 pub mod rewriter;
-pub mod error;
+pub mod compat;
 
+use anyhow::{Result, Context};
+use async_trait::async_trait;
 use libsql::Database;
-use anyhow::Result;
+use std::sync::Arc;
 
-/// Main entry point for the libSQL RLS extension
+use crate::compat::DatabaseWrapper;
+use crate::policy::PolicyManager;
+use crate::rewriter::QueryRewriter;
+
+/// Reexports important types and traits for easy use
+pub mod prelude {
+    // Re-export from the crate
+    pub use crate::compat::{DatabaseWrapper, ConnectionExt, IntoParams};
+    pub use crate::error::Error;
+    pub use crate::parser::Parser;
+    pub use crate::policy::{Policy, PolicyManager};
+    pub use crate::rewriter::QueryRewriter;
+    pub use crate::RlsExtension;
+    pub use crate::RlsExt;
+}
+
+/// Extension trait for libSQL to add Row Level Security
+#[async_trait]
+pub trait RlsExt {
+    /// Initialize the RLS extension
+    async fn initialize(&mut self) -> Result<()>;
+
+    /// Get a query rewriter to transform SQL based on RLS policies
+    fn rewriter(&self) -> QueryRewriter;
+    
+    /// Get the database wrapper reference for external use
+    fn wrapper(&self) -> &DatabaseWrapper;
+}
+
+/// The main extension struct for Row Level Security
 pub struct RlsExtension {
-    database: Database,
+    wrapper: DatabaseWrapper,
 }
 
 impl RlsExtension {
-    /// Create a new RLS extension for the given database
-    pub fn new(database: Database) -> Self {
-        Self { database }
+    /// Create a new RLS extension with the given database
+    pub fn new(database: Arc<Database>) -> Self {
+        let wrapper = DatabaseWrapper::new(database);
+        Self {
+            wrapper,
+        }
     }
+}
 
-    /// Initialize the RLS extension, setting up required metadata tables
-    pub async fn initialize(&self) -> Result<()> {
-        // Create the metadata tables needed for RLS
-        self.create_metadata_tables().await?;
-        Ok(())
-    }
-
-    /// Create the metadata tables needed for RLS
-    async fn create_metadata_tables(&self) -> Result<()> {
-        let conn = self.database.connect()?;
+#[async_trait]
+impl RlsExt for RlsExtension {
+    /// Initialize the RLS extension
+    async fn initialize(&mut self) -> Result<()> {
+        // Create the RLS metadata tables if they don't exist
+        let conn = self.wrapper.inner().connect().context("Failed to connect to database")?;
         
-        // Table to track which tables have RLS enabled
+        // Tables table - tracks which tables have RLS enabled
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _rls_tables (
                 table_name TEXT PRIMARY KEY,
-                enabled BOOLEAN NOT NULL DEFAULT FALSE
+                enabled BOOLEAN NOT NULL DEFAULT 0
             )",
-            (),
+            compat::empty_params(),
         ).await?;
-
-        // Table to store RLS policies
+        
+        // Policies table - stores RLS policies
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _rls_policies (
-                id INTEGER PRIMARY KEY,
                 policy_name TEXT NOT NULL,
                 table_name TEXT NOT NULL,
                 operation TEXT NOT NULL,
                 using_expr TEXT,
                 check_expr TEXT,
-                UNIQUE(policy_name, table_name),
-                FOREIGN KEY(table_name) REFERENCES _rls_tables(table_name) ON DELETE CASCADE
+                PRIMARY KEY (policy_name, table_name),
+                FOREIGN KEY (table_name) REFERENCES _rls_tables(table_name)
             )",
-            (),
+            compat::empty_params(),
         ).await?;
-
+        
         Ok(())
     }
 
-    /// Execute a query with RLS applied
-    pub async fn execute(&self, sql: &str) -> Result<libsql::Statement> {
-        // Parse the SQL to an AST
-        let ast = self.parse_sql(sql)?;
-        
-        // Apply RLS transformations to the AST
-        let transformed_ast = self.apply_rls(ast).await?;
-        
-        // Convert the AST back to SQL
-        let transformed_sql = self.ast_to_sql(transformed_ast)?;
-        
-        // Execute the transformed SQL
-        let stmt = self.database.connect()?.prepare(&transformed_sql).await?;
-        
-        Ok(stmt)
+    /// Get a query rewriter for this extension
+    fn rewriter(&self) -> QueryRewriter {
+        let db_arc = self.wrapper.inner();
+        let policy_manager = PolicyManager::new(db_arc.clone());
+        QueryRewriter::new(db_arc, policy_manager)
     }
-
-    // Parse SQL to AST
-    fn parse_sql(&self, sql: &str) -> Result<sqlparser::ast::Statement> {
-        self.parser().parse_sql(sql)
+    
+    /// Get the database wrapper for external use
+    fn wrapper(&self) -> &DatabaseWrapper {
+        &self.wrapper
     }
-
-    // Apply RLS transformations to the AST
-    async fn apply_rls(&self, ast: sqlparser::ast::Statement) -> Result<sqlparser::ast::Statement> {
-        let rewriter = self.rewriter().with_policy_manager(self.database.clone());
-        rewriter.rewrite(ast).await
-    }
-
-    // Convert AST back to SQL
-    fn ast_to_sql(&self, ast: sqlparser::ast::Statement) -> Result<String> {
-        Ok(ast.to_string())
-    }
-
-    // Get a parser instance
-    fn parser(&self) -> parser::Parser {
-        parser::Parser::new()
-    }
-
-    // Get a rewriter instance
-    fn rewriter(&self) -> rewriter::Rewriter {
-        rewriter::Rewriter::new()
-    }
-}
-
-/// A prelude of commonly used types
-pub mod prelude {
-    pub use crate::RlsExtension;
-    pub use crate::error::Error;
-    pub use anyhow::{Result, Context};
 } 

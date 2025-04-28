@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Custom error types for the libSQL RLS extension
+/// Custom error types for the RLS extension
 #[derive(Error, Debug)]
 pub enum Error {
     /// Error that occurs during SQL parsing
@@ -28,5 +28,5 @@ pub enum Error {
     Other(String),
 }
 
-/// Result type alias for libSQL RLS operations
+/// Result type alias for RLS operations
 pub type Result<T> = std::result::Result<T, Error>; 

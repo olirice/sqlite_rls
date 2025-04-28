@@ -2,6 +2,41 @@ use sqlparser::ast::{self, Statement, TableFactor, Expr, ObjectName, Query, SetE
 use anyhow::Result;
 use crate::error::Error;
 
+/// A visitor for SQL AST nodes
+pub trait Visitor {
+    /// Visit a table reference
+    fn visit_table(&mut self, table: &TableFactor) -> Result<()>;
+    
+    /// Visit a statement (default implementation)
+    fn visit_statement(&mut self, stmt: &Statement) -> Result<()> {
+        match stmt {
+            Statement::Query(query) => self.visit_query(query),
+            _ => Ok(()),
+        }
+    }
+    
+    /// Visit a query (default implementation)
+    fn visit_query(&mut self, query: &Query) -> Result<()> {
+        match &*query.body {
+            SetExpr::Select(select) => self.visit_select(select),
+            _ => Ok(()),
+        }
+    }
+    
+    /// Visit a SELECT statement (default implementation)
+    fn visit_select(&mut self, select: &Select) -> Result<()> {
+        for table_with_joins in &select.from {
+            self.visit_table(&table_with_joins.relation)?;
+            
+            // Visit joined tables
+            for join in &table_with_joins.joins {
+                self.visit_table(&join.relation)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Handles manipulation of SQL Abstract Syntax Trees
 pub struct AstManipulator;
 
@@ -24,7 +59,7 @@ impl AstManipulator {
 
     /// Add a WHERE condition to a Query
     fn add_where_to_query(&self, query: &mut Box<Query>, table_name: &str, condition: Expr) -> Result<()> {
-        match &mut query.body {
+        match &mut *query.body {
             SetExpr::Select(select) => {
                 self.add_where_to_select(select, table_name, condition)?;
                 Ok(())
@@ -82,6 +117,38 @@ impl AstManipulator {
         // Here we just create a simple identifier expression for demo purposes
         
         Ok(Expr::Identifier(ast::Ident::new(expr_str)))
+    }
+
+    /// Extract table names from a statement
+    pub fn extract_table_names(&self, stmt: &Statement) -> Vec<String> {
+        let mut extractor = TableNameExtractor::new();
+        let _ = extractor.visit_statement(stmt);
+        extractor.table_names
+    }
+}
+
+/// A visitor that extracts table names from an AST
+struct TableNameExtractor {
+    table_names: Vec<String>,
+}
+
+impl TableNameExtractor {
+    fn new() -> Self {
+        Self {
+            table_names: Vec::new(),
+        }
+    }
+}
+
+impl Visitor for TableNameExtractor {
+    fn visit_table(&mut self, table: &TableFactor) -> Result<()> {
+        if let TableFactor::Table { name, .. } = table {
+            if !name.0.is_empty() {
+                let table_name = name.0.last().unwrap().value.clone();
+                self.table_names.push(table_name);
+            }
+        }
+        Ok(())
     }
 }
 

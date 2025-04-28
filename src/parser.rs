@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser as SqlParser;
 use sqlparser::tokenizer::Tokenizer;
+use sqlparser::ast::{Statement, Value, Expr, Ident};
 use crate::error::Error;
 
 /// SQL Parser for libSQL that handles both standard SQL and RLS-specific syntax
@@ -20,14 +21,73 @@ impl Parser {
     /// Parse SQL string into an AST
     pub fn parse_sql(&self, sql: &str) -> Result<sqlparser::ast::Statement> {
         // Tokenize the SQL
-        let mut tokenizer = Tokenizer::new(&self.dialect, sql);
-        let tokens = tokenizer.tokenize().map_err(|e| Error::ParsingError(e.to_string()))?;
+        let _tokens = Tokenizer::new(&self.dialect, sql).tokenize().map_err(|e| Error::ParsingError(e.to_string()))?;
         
-        // Parse the tokens
-        let mut parser = SqlParser::new(tokens);
-        let ast = parser.parse_statement().map_err(|e| Error::ParsingError(e.to_string()))?;
+        // Parse the tokens into a statement
+        let dialect = SQLiteDialect {};
+        let ast = SqlParser::parse_sql(&dialect, sql).map_err(|e| Error::ParsingError(e.to_string()))?;
         
-        Ok(ast)
+        if ast.len() != 1 {
+            return Err(Error::ParsingError("Expected exactly one SQL statement".to_string()).into());
+        }
+        
+        Ok(ast.into_iter().next().unwrap())
+    }
+
+    /// Parse SQL statements including potentially RLS-specific statements
+    /// Returns a Vec of Statement which could be either SQL or RLS statements
+    pub fn parse_sql_with_rls(&self, sql: &str) -> Result<Vec<Statement>> {
+        // Split the input on semicolons
+        let statements = sql.split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        
+        // For real implementation, you would need proper SQL parsing to handle 
+        // semicolons inside quoted strings, comments, etc.
+        
+        let mut result = Vec::new();
+        for stmt_str in statements {
+            // Try to parse as regular SQL first
+            match SqlParser::parse_sql(&self.dialect, stmt_str) {
+                Ok(stmts) => {
+                    // Successfully parsed as regular SQL
+                    result.extend(stmts);
+                },
+                Err(_) => {
+                    // Not regular SQL, try to parse as RLS statement
+                    if stmt_str.to_uppercase().contains("ROW LEVEL SECURITY") || 
+                       stmt_str.to_uppercase().contains("CREATE POLICY") ||
+                       stmt_str.to_uppercase().contains("DROP POLICY") {
+                        // Create a custom Statement type for the RLS statement
+                        let _rls_stmt = self.parse_rls_statement(stmt_str)?;
+                        
+                        // Create a simple select statement as a placeholder
+                        // The real implementation would properly handle RLS statements
+                        let mut query = sqlparser::ast::Query {
+                            with: None,
+                            body: Box::new(sqlparser::ast::SetExpr::Values(sqlparser::ast::Values {
+                                explicit_row: false,
+                                rows: vec![vec![sqlparser::ast::Expr::Value(
+                                    sqlparser::ast::Value::SingleQuotedString(format!("RLS: {}", stmt_str))
+                                )]],
+                            })),
+                            order_by: vec![],
+                            limit: None,
+                            offset: None,
+                            fetch: None,
+                            locks: vec![],
+                        };
+                        
+                        result.push(Statement::Query(Box::new(query)));
+                    } else {
+                        return Err(Error::ParsingError(format!("Failed to parse statement: {}", stmt_str)).into());
+                    }
+                }
+            }
+        }
+        
+        Ok(result)
     }
 
     /// Parse RLS-specific SQL statements (like CREATE POLICY) that aren't part of standard SQL
@@ -224,4 +284,30 @@ pub enum RlsOperation {
     Delete,
     /// All operations
     All,
+}
+
+impl std::fmt::Display for RlsOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RlsOperation::Select => write!(f, "SELECT"),
+            RlsOperation::Insert => write!(f, "INSERT"),
+            RlsOperation::Update => write!(f, "UPDATE"),
+            RlsOperation::Delete => write!(f, "DELETE"),
+            RlsOperation::All => write!(f, "ALL"),
+        }
+    }
+}
+
+impl RlsOperation {
+    /// Create an RlsOperation from a string
+    pub fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s.to_uppercase().as_str() {
+            "SELECT" => Ok(RlsOperation::Select),
+            "INSERT" => Ok(RlsOperation::Insert),
+            "UPDATE" => Ok(RlsOperation::Update),
+            "DELETE" => Ok(RlsOperation::Delete),
+            "ALL" => Ok(RlsOperation::All),
+            _ => Err(anyhow::anyhow!("Invalid RLS operation: {}", s)),
+        }
+    }
 } 

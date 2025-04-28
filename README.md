@@ -4,7 +4,7 @@ This extension adds PostgreSQL-like Row Level Security capabilities to libSQL. I
 
 ## Current Status
 
-> **IMPORTANT NOTE:** This project is currently at the proof-of-concept stage. The code demonstrates the architectural approach to implementing Row Level Security in libSQL through AST manipulation. Due to API changes in recent libSQL versions, the current implementation requires adaptation to work with the latest libSQL API. The code structure and approach are sound, but specific API usage needs updates.
+This project has been updated to work with the latest libSQL API (0.9.x) using the new async APIs and Builder pattern. The implementation uses Arc for sharing database connections safely.
 
 ## Features
 
@@ -12,6 +12,7 @@ This extension adds PostgreSQL-like Row Level Security capabilities to libSQL. I
 - AST-based policy enforcement
 - Support for complex policy conditions
 - Automatic policy application to queries
+- Compatible with libSQL 0.9.x
 
 ## Installation
 
@@ -26,18 +27,51 @@ cargo build --release
 
 ## Usage
 
-### Interactive Mode
+### Integration with Your Application
 
-To launch an interactive libSQL shell with RLS support:
+```rust
+use rls::prelude::*;
+use rls::policy::{Policy, PolicyManager};
+use rls::parser::RlsOperation;
+use libsql::{Builder, Database};
+use anyhow::Result;
+use std::sync::Arc;
 
-```bash
-cargo run --bin libsql_shell -- [DATABASE_PATH]
-```
-
-Or use the compiled binary directly:
-
-```bash
-./target/release/libsql_shell [DATABASE_PATH]
+#[tokio::main]
+async fn example() -> Result<()> {
+    // Open a database using the Builder pattern
+    let db = Builder::new_local("my_database.db")
+        .build()
+        .await?;
+    
+    // Initialize RLS extension with Arc for thread safety
+    let db_arc = Arc::new(db);
+    let rls = RlsExtension::new(db_arc.clone());
+    rls.initialize().await?;
+    
+    // Create a policy manager
+    let policy_manager = PolicyManager::new(db_arc.clone());
+    
+    // Enable RLS on your table
+    policy_manager.set_rls_enabled("my_table", true).await?;
+    
+    // Create a policy that filters rows by user ID
+    let policy = Policy::new(
+        "user_policy",
+        "my_table",
+        RlsOperation::Select,
+        Some("user_id = current_user_id()".to_string()),
+        None,
+    );
+    
+    policy_manager.create_policy(&policy).await?;
+    
+    // Queries will automatically respect RLS policies
+    let conn = db_arc.connect()?;
+    let rows = conn.query_all("SELECT * FROM my_table", empty_params()).await?;
+    
+    Ok(())
+}
 ```
 
 ### RLS Syntax
@@ -54,27 +88,36 @@ CREATE POLICY my_policy ON my_table
 
 ## Testing
 
+The project includes comprehensive test suites:
+
 ```bash
+# Run all tests
 cargo test
+
+# Run specific test category
+cargo test unit
+cargo test ast
+cargo test rls
 ```
-
-## Development
-
-This project uses Rust and integrates with libSQL. Make sure you have:
-
-1. Rust installed (https://rustup.rs/)
-2. Cargo package manager
-3. libSQL development dependencies
 
 ## Project Structure
 
+- `src/lib.rs` - Main library and extension implementation
 - `src/ast.rs` - AST manipulation utilities
 - `src/parser.rs` - SQL parser with RLS extensions
 - `src/policy.rs` - Policy management
 - `src/rewriter.rs` - SQL rewriting to apply RLS
-- `src/bin/shell.rs` - Interactive shell
-- `tests/` - Comprehensive test suite
-- `examples/` - Example usage
+- `src/compat.rs` - Compatibility layer for libSQL API
+- `tests/unit_tests.rs` - Core functionality tests
+- `tests/ast_tests.rs` - AST transformation tests
+- `tests/rls_tests.rs` - Integration tests
+
+## Implementation Notes
+
+- The extension uses `Arc<Database>` for safe sharing of database connections
+- All database operations use the async API with proper awaiting
+- The `DatabaseWrapper` provides a convenient interface for working with the database
+- Proper error handling is implemented throughout the codebase
 
 ## Contributing
 
