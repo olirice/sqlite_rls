@@ -2,7 +2,7 @@
 name = "libsql_rls"
 version = "0.1.0"
 edition = "2021"
-description = "Row Level Security extension for libSQL"
+description = "Row Level Security extension for libSQL (Proof of Concept)"
 authors = ["Your Name <your.email@example.com>"]
 license = "MIT"
 repository = "https://github.com/yourusername/libsql_rls"
@@ -17,9 +17,9 @@ path = "src/bin/shell.rs"
 
 [dependencies]
 # Core dependencies for libSQL integration
-libsql = { version = "0.1.5", features = ["wasm"] }
-libsql-sys = "0.2.0"
+libsql = { version = "0.2.0", default-features = false }
 sqlparser = "0.35.0"
+rusqlite = { version = "0.29.0", features = ["bundled"] }
 
 # Utilities
 thiserror = "1.0.40"
@@ -36,4 +36,8 @@ test-case = "3.1.0"
 
 [features]
 default = []
-test-utils = [] 
+test-utils = []
+
+[package.metadata]
+status = "proof-of-concept"
+notes = "This is a proof of concept that demonstrates the architectural approach to implementing Row Level Security in libSQL through AST manipulation." 
