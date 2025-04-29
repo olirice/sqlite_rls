@@ -112,11 +112,28 @@ impl AstManipulator {
 
     /// Parse a string expression into an Expr AST node
     pub fn parse_expr(&self, expr_str: &str) -> Result<Expr> {
-        // This is a placeholder - in a real implementation you would 
-        // use sqlparser to properly parse the expression string
-        // Here we just create a simple identifier expression for demo purposes
+        // Use the SQLite dialect to parse the expression
+        let dialect = sqlparser::dialect::SQLiteDialect {};
         
-        Ok(Expr::Identifier(ast::Ident::new(expr_str)))
+        // Add a dummy SELECT to create a valid SQL statement with the expression
+        let sql = format!("SELECT {} FROM dual", expr_str);
+        
+        // Parse the SQL
+        let ast = sqlparser::parser::Parser::parse_sql(&dialect, &sql)?;
+        
+        // Extract the expression from the SELECT statement
+        if let Some(Statement::Query(query)) = ast.get(0) {
+            if let SetExpr::Select(select) = &*query.body {
+                if let Some(expr) = select.projection.get(0) {
+                    if let sqlparser::ast::SelectItem::UnnamedExpr(expr) = expr {
+                        return Ok(expr.clone());
+                    }
+                }
+            }
+        }
+        
+        // Fallback to a simple literal if parsing fails
+        Ok(Expr::Value(sqlparser::ast::Value::Boolean(true)))
     }
 
     /// Extract table names from a statement

@@ -108,15 +108,15 @@ impl PolicyManager {
     pub async fn get_policies(&self, table: &str, operation: &RlsOperation) -> Result<Vec<Policy>> {
         let conn = self.database.connect()?;
         let op_str = operation.to_string();
-
-        // Get all policies for this table and operation
+        
+        // Get all policies for this table and operation (or operation = 'ALL')
         let rows = conn.query_all(
             "SELECT policy_name, table_name, operation, using_expr, check_expr
              FROM _rls_policies
-             WHERE table_name = ? AND operation = ?",
+             WHERE table_name = ? AND (operation = ? OR operation = 'ALL')",
             (table, op_str),
         ).await?;
-
+        
         let mut policies = Vec::new();
         for row in rows {
             let policy = Policy {
@@ -128,7 +128,15 @@ impl PolicyManager {
             };
             policies.push(policy);
         }
-
+        
+        println!("Found {} policies for table {} and operation {:?}", 
+                 policies.len(), table, operation);
+        
+        for policy in &policies {
+            println!("  Policy: name={}, operation={:?}, using_expr={:?}", 
+                     policy.name, policy.operation, policy.using_expr);
+        }
+        
         Ok(policies)
     }
 
@@ -147,6 +155,9 @@ impl PolicyManager {
     pub async fn create_policy(&self, policy: &Policy) -> Result<()> {
         let conn = self.database.connect()?;
         
+        // Begin a transaction
+        conn.execute("BEGIN TRANSACTION", crate::compat::empty_params()).await?;
+
         // Check if the policy already exists
         let exists = conn.query_row(
             "SELECT 1 FROM _rls_policies WHERE policy_name = ? AND table_name = ?",
@@ -154,12 +165,16 @@ impl PolicyManager {
         ).await?;
 
         if exists.is_some() {
+            // Rollback the transaction
+            conn.execute("ROLLBACK", crate::compat::empty_params()).await?;
             return Err(anyhow!("Policy {} already exists on table {}", policy.name, policy.table));
         }
 
         // Check if the table exists
         let table_exists = self.table_exists(&policy.table).await?;
         if !table_exists {
+            // Rollback the transaction
+            conn.execute("ROLLBACK", crate::compat::empty_params()).await?;
             return Err(anyhow!("Table {} does not exist", policy.table));
         }
 
@@ -175,6 +190,9 @@ impl PolicyManager {
                 policy.check_expr.as_deref(),
             ),
         ).await?;
+        
+        // Commit the transaction
+        conn.execute("COMMIT", crate::compat::empty_params()).await?;
 
         Ok(())
     }
@@ -233,9 +251,18 @@ impl PolicyManager {
     pub async fn set_rls_enabled(&self, table: &str, enabled: bool) -> Result<()> {
         let conn = self.database.connect()?;
         
+        // Begin a transaction
+        conn.execute("BEGIN TRANSACTION", crate::compat::empty_params()).await?;
+        
         // Check if the table exists
-        let table_exists = self.table_exists(table).await?;
-        if !table_exists {
+        let table_exists = conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            table,
+        ).await?;
+        
+        if table_exists.is_none() {
+            // Rollback the transaction
+            conn.execute("ROLLBACK", crate::compat::empty_params()).await?;
             return Err(anyhow!("Table {} does not exist", table));
         }
 
@@ -260,6 +287,9 @@ impl PolicyManager {
                 (table, enabled_val),
             ).await?;
         }
+        
+        // Commit the transaction
+        conn.execute("COMMIT", crate::compat::empty_params()).await?;
 
         Ok(())
     }

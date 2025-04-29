@@ -64,18 +64,25 @@ impl RlsExt for RlsExtension {
     /// Initialize the RLS extension
     async fn initialize(&mut self) -> Result<()> {
         // Create the RLS metadata tables if they don't exist
+        println!("RLS: Starting initialization...");
+        
+        // Get a direct connection to the database
         let conn = self.wrapper.inner().connect().context("Failed to connect to database")?;
+        println!("RLS: Connected to database successfully");
         
         // Tables table - tracks which tables have RLS enabled
+        println!("RLS: Creating _rls_tables...");
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _rls_tables (
                 table_name TEXT PRIMARY KEY,
                 enabled BOOLEAN NOT NULL DEFAULT 0
             )",
             compat::empty_params(),
-        ).await?;
+        ).await.context("Failed to create _rls_tables")?;
+        println!("RLS: _rls_tables created successfully");
         
         // Policies table - stores RLS policies
+        println!("RLS: Creating _rls_policies...");
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _rls_policies (
                 policy_name TEXT NOT NULL,
@@ -87,8 +94,30 @@ impl RlsExt for RlsExtension {
                 FOREIGN KEY (table_name) REFERENCES _rls_tables(table_name)
             )",
             compat::empty_params(),
-        ).await?;
+        ).await.context("Failed to create _rls_policies")?;
+        println!("RLS: _rls_policies created successfully");
         
+        // Verify tables exist
+        println!("RLS: Verifying tables exist...");
+        let mut tables_row = conn.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='_rls_tables'",
+            compat::empty_params(),
+        ).await.context("Failed to verify _rls_tables existence")?;
+        
+        let mut exists = false;
+        let mut row_count = 0;
+        while let Some(_) = tables_row.next().await? {
+            exists = true;
+            row_count += 1;
+        }
+        
+        if exists {
+            println!("RLS: _rls_tables verified to exist ({} rows)", row_count);
+        } else {
+            println!("RLS: _rls_tables NOT found in sqlite_master!");
+        }
+        
+        println!("RLS: Initialization complete");
         Ok(())
     }
 
