@@ -1,6 +1,7 @@
 mod policy;
 mod error;
 mod connection;
+mod sql_parser;
 
 pub use connection::RlsConnection;
 pub use error::Error;

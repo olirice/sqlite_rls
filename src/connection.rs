@@ -1,8 +1,9 @@
-use crate::Result;
+use crate::{policy::Policy, sql_parser, Result};
 use libsql::{Connection, params, Rows};
 use libsql::params::IntoParams;
 use regex::Regex;
 use lazy_static::lazy_static;
+use sqlparser::ast::Statement;
 
 lazy_static! {
     // Basic regex pattern for CREATE POLICY statements
@@ -23,7 +24,7 @@ lazy_static! {
 /// 
 /// 1. Recognizing and processing CREATE POLICY statements
 /// 2. Storing policy information in the _rls_policies table
-/// 3. (Future) Rewriting SELECT statements to apply RLS policies
+/// 3. Rewriting SELECT statements to apply RLS policies
 pub struct RlsConnection {
     conn: Connection,
 }
@@ -79,6 +80,31 @@ impl RlsConnection {
         Ok(rls_conn)
     }
     
+    /// Get policies for a given table
+    async fn get_policies_for_table(&self, table_name: &str) -> Result<Vec<Policy>> {
+        let mut rows = self.conn.query(
+            "SELECT name, schema_name, table_name, command, using_expr, check_expr 
+             FROM _rls_policies 
+             WHERE table_name = ? AND (command = 'ALL' OR command = 'SELECT')",
+            params![table_name],
+        ).await?;
+        
+        let mut policies = Vec::new();
+        
+        while let Some(row) = rows.next()? {
+            policies.push(Policy {
+                name: row.get(0)?,
+                schema_name: row.get(1)?,
+                table_name: row.get(2)?,
+                command: row.get(3)?,
+                using_expr: row.get(4)?,
+                check_expr: row.get(5)?,
+            });
+        }
+        
+        Ok(policies)
+    }
+    
     /// Execute a SQL statement with RLS processing
     /// 
     /// This method intercepts CREATE POLICY statements and processes them
@@ -127,16 +153,45 @@ impl RlsConnection {
                 ],
             ).await.map_err(Into::into)
         } else {
-            // Otherwise, just execute the SQL as is
-            // In a future implementation, this would rewrite SELECT statements to apply RLS
+            // Try to parse the SQL to apply RLS policies
+            match sql_parser::parse_sql(sql) {
+                Ok(mut stmt) => {
+                    // For now, we only handle SELECT statements
+                    if let Statement::Query(_) = &stmt {
+                        // Extract table references
+                        let tables = sql_parser::extract_table_references(&stmt);
+                        
+                        // Apply RLS policies for each referenced table
+                        let mut modified = false;
+                        for table in tables {
+                            let policies = self.get_policies_for_table(&table).await?;
+                            if !policies.is_empty() {
+                                sql_parser::apply_rls_to_select(&mut stmt, &policies)?;
+                                modified = true;
+                            }
+                        }
+                        
+                        if modified {
+                            // Compile the modified AST back to SQL
+                            let rewritten_sql = sql_parser::compile_ast_to_sql(&stmt);
+                            return self.conn.execute(&rewritten_sql, params_values).await.map_err(Into::into);
+                        }
+                    }
+                }
+                Err(_) => {
+                    // If we can't parse it, just pass it through
+                    // This allows DDL statements to work normally
+                }
+            }
+            
+            // If we reach here, just execute the original SQL
             self.conn.execute(sql, params_values).await.map_err(Into::into)
         }
     }
     
     /// Execute a query and return the rows
     /// 
-    /// Currently, this just passes the query through to the underlying connection.
-    /// In a full implementation, this would rewrite SELECT statements to enforce RLS.
+    /// Applies RLS to SELECT statements before execution.
     /// 
     /// # Arguments
     /// 
@@ -146,8 +201,38 @@ impl RlsConnection {
     where
         P: IntoParams,
     {
-        // For now, just pass through to the underlying connection
-        // In a full implementation, this would rewrite SELECT statements to enforce RLS
+        // Try to parse the SQL to apply RLS policies
+        match sql_parser::parse_sql(sql) {
+            Ok(mut stmt) => {
+                // For now, we only handle SELECT statements
+                if let Statement::Query(_) = &stmt {
+                    // Extract table references
+                    let tables = sql_parser::extract_table_references(&stmt);
+                    
+                    // Apply RLS policies for each referenced table
+                    let mut modified = false;
+                    for table in tables {
+                        let policies = self.get_policies_for_table(&table).await?;
+                        if !policies.is_empty() {
+                            sql_parser::apply_rls_to_select(&mut stmt, &policies)?;
+                            modified = true;
+                        }
+                    }
+                    
+                    if modified {
+                        // Compile the modified AST back to SQL
+                        let rewritten_sql = sql_parser::compile_ast_to_sql(&stmt);
+                        return self.conn.query(&rewritten_sql, params_values).await.map_err(Into::into);
+                    }
+                }
+            }
+            Err(_) => {
+                // If we can't parse it, just pass it through
+                // This allows special queries to work normally
+            }
+        }
+        
+        // If we reach here, just execute the original SQL
         self.conn.query(sql, params_values).await.map_err(Into::into)
     }
 } 
