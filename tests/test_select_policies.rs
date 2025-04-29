@@ -16,14 +16,19 @@ use sqlparser::parser::Parser;
 async fn test_ownership_policy() -> Result<()> {
     println!("Starting ownership policy test...");
     // Setup - Use a unique database name
-    let (db_arc, conn, rls) = common::setup_test_db_with_name("memdb_ownership").await?;
+    let (db_arc, conn, mut rls) = common::setup_test_db_with_name("memdb_ownership").await?;
     
     // Reset the test environment to ensure clean state
     println!("Resetting test environment to ensure clean state...");
     common::reset_test_environment(&conn).await?;
     
     // Setup test tables
+    println!("Creating test tables after environment reset...");
     common::create_test_tables(&conn).await?;
+    
+    // Make sure RLS is initialized after reset
+    println!("Re-initializing RLS extension after environment reset...");
+    rls.initialize().await?;
     
     // Verify data exists in posts table
     println!("Verifying data in posts table with direct query:");
@@ -33,12 +38,12 @@ async fn test_ownership_policy() -> Result<()> {
         println!("Post {}: id={}, user_id={}, title='{}'", 
                  i, 
                  row.get::<i64>(0).unwrap_or(-1), 
-                 row.get::<i64>(1).unwrap_or(-1),
-                 row.get::<String>(2).unwrap_or_default());
+                 row.get::<i64>(3).unwrap_or(-1),  // user_id is at index 3
+                 row.get::<String>(1).unwrap_or_default());  // title is at index 1
     }
     
     // Create policy manager
-    let policy_manager = PolicyManager::new(db_arc.clone());
+    let policy_manager = PolicyManager::new(db_arc);
     
     // Enable RLS on posts table
     common::enable_rls_default(&policy_manager, "posts").await?;
@@ -54,12 +59,8 @@ async fn test_ownership_policy() -> Result<()> {
     
     // Verify the policy was created
     let policy = policy_manager.get_policy("posts_ownership", "posts").await?;
-    if let Some(p) = policy {
-        println!("Policy found: name={}, table={}, operation={:?}, using_expr={:?}", 
-                 p.name(), p.table(), p.operation(), p.using_expr());
-    } else {
-        println!("Policy not found!");
-    }
+    println!("Policy found: name={}, table={}, operation={:?}, using_expr={:?}", 
+             policy.name(), policy.table(), policy.operation(), policy.using_expr());
     
     // Set context to Alice (user_id = 2)
     common::set_user_context(&conn, 2, "user").await?;
@@ -84,10 +85,10 @@ async fn test_ownership_policy() -> Result<()> {
         println!("Row {}: id={}, user_id={}", 
                  i, 
                  row.get::<i64>(0).unwrap_or(-1), 
-                 row.get::<i64>(1).unwrap_or(-1));
+                 row.get::<i64>(3).unwrap_or(-1));  // user_id is at index 3
         
         // Check if this post belongs to Alice (user_id = 2)
-        match row.get::<i64>(1) {
+        match row.get::<i64>(3) {  // user_id is at index 3
             Ok(user_id) => {
                 assert_eq!(user_id, 2, "Post should belong to Alice (user_id=2)");
             },
@@ -120,10 +121,10 @@ async fn test_ownership_policy() -> Result<()> {
         println!("Row {}: id={}, user_id={}", 
                  i, 
                  row.get::<i64>(0).unwrap_or(-1), 
-                 row.get::<i64>(1).unwrap_or(-1));
+                 row.get::<i64>(3).unwrap_or(-1));  // user_id is at index 3
         
         // Check if this post belongs to Bob (user_id = 3)
-        match row.get::<i64>(1) {
+        match row.get::<i64>(3) {  // user_id is at index 3
             Ok(user_id) => {
                 assert_eq!(user_id, 3, "Post should belong to Bob (user_id=3)");
             },
@@ -132,6 +133,9 @@ async fn test_ownership_policy() -> Result<()> {
             }
         }
     }
+    
+    // Roll back the transaction to clean up after test
+    common::rollback_test_transaction(&conn).await?;
     
     Ok(())
 }
@@ -143,7 +147,7 @@ async fn test_public_visibility_policy() -> Result<()> {
     common::setup_test_tables(&conn).await?;
     
     // Create policy manager
-    let policy_manager = PolicyManager::new(db_arc.clone());
+    let policy_manager = PolicyManager::new(db_arc);
     
     // Enable RLS on posts table
     common::enable_rls_default(&policy_manager, "posts").await?;
@@ -178,6 +182,9 @@ async fn test_public_visibility_policy() -> Result<()> {
     // Note: Due to the NULL value issue in the test environment, we can't check the actual values
     // but we can check the count to verify the RLS policies are working correctly
     
+    // Roll back the transaction to clean up after test
+    common::rollback_test_transaction(&conn).await?;
+    
     Ok(())
 }
 
@@ -188,7 +195,7 @@ async fn test_admin_bypass_policy() -> Result<()> {
     common::setup_test_tables(&conn).await?;
     
     // Create policy manager
-    let policy_manager = PolicyManager::new(db_arc.clone());
+    let policy_manager = PolicyManager::new(db_arc);
     
     // Enable RLS on posts table
     common::enable_rls_default(&policy_manager, "posts").await?;
@@ -227,6 +234,9 @@ async fn test_admin_bypass_policy() -> Result<()> {
     
     // Alice should see only her 2 posts
     assert_eq!(results.len(), 2, "Alice should see only her 2 posts");
+    
+    // Roll back the transaction to clean up after test
+    common::rollback_test_transaction(&conn).await?;
     
     Ok(())
 }

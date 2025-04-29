@@ -46,14 +46,42 @@ impl AstManipulator {
         Self
     }
 
-    /// Add a WHERE condition to a SELECT statement
+    /// Add a WHERE condition to a statement
     pub fn add_where_condition(&self, stmt: &mut Statement, table_name: &str, condition: Expr) -> Result<()> {
         match stmt {
             Statement::Query(query) => {
                 self.add_where_to_query(query, table_name, condition)?;
                 Ok(())
             },
-            _ => Err(Error::RewritingError("Can only add WHERE conditions to SELECT statements".to_string()).into()),
+            Statement::Update { selection, .. } => {
+                // If WHERE already exists, AND it with the new condition
+                if let Some(ref mut where_clause) = selection {
+                    *where_clause = Expr::BinaryOp {
+                        left: Box::new(where_clause.clone()),
+                        op: ast::BinaryOperator::And,
+                        right: Box::new(condition),
+                    };
+                } else {
+                    // Otherwise, set the WHERE clause to the condition
+                    *selection = Some(condition);
+                }
+                Ok(())
+            },
+            Statement::Delete { selection, .. } => {
+                // If WHERE already exists, AND it with the new condition
+                if let Some(ref mut where_clause) = selection {
+                    *where_clause = Expr::BinaryOp {
+                        left: Box::new(where_clause.clone()),
+                        op: ast::BinaryOperator::And,
+                        right: Box::new(condition),
+                    };
+                } else {
+                    // Otherwise, set the WHERE clause to the condition
+                    *selection = Some(condition);
+                }
+                Ok(())
+            },
+            _ => Err(Error::RewritingError("Can only add WHERE conditions to SELECT, UPDATE, or DELETE statements".to_string()).into()),
         }
     }
 

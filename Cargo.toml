@@ -23,6 +23,7 @@ log = "0.4.17"
 env_logger = "0.10.0"
 rustyline = "10.0.0"
 rand = "0.9.1"
+serial_test = "3.2.0"
 
 [lib]
 name = "rls"

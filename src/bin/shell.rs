@@ -131,24 +131,21 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             },
                             RlsStatement::CreatePolicy { policy_name, table_name, operation, using_expr, check_expr } => {
+                                let policy_manager = rls::policy::PolicyManager::new(db_arc.clone());
                                 let policy = rls::policy::Policy::new(
-                                    policy_name.clone(),
-                                    table_name.clone(),
+                                    &policy_name,
+                                    &table_name,
                                     operation,
                                     using_expr,
                                     check_expr,
                                 );
                                 
-                                let policy_manager = rls::policy::PolicyManager::new(db_arc.clone());
                                 policy_manager.create_policy(&policy).await?;
                                 
                                 println!("Created policy '{}' on table '{}'", policy_name, table_name);
                             },
-                            RlsStatement::DropPolicy { policy_name, table_name } => {
-                                let policy_manager = rls::policy::PolicyManager::new(db_arc.clone());
-                                policy_manager.drop_policy(&policy_name, &table_name).await?;
-                                
-                                println!("Dropped policy '{}' on table '{}'", policy_name, table_name);
+                            RlsStatement::DropPolicy { policy_name: _, table_name: _ } => {
+                                println!("Drop policy operation is not supported in this version");
                             }
                         }
                     },

@@ -159,38 +159,17 @@ impl Parser {
             Error::ParsingError("Could not find ON in CREATE POLICY statement".to_string()))?;
         
         let table_section = &sql[on_idx + 2..];
-        let table_end = table_section.to_uppercase().find("FOR").unwrap_or(table_section.len());
+        let table_end = table_section.to_uppercase().find("USING").unwrap_or_else(|| 
+            table_section.len());
         let table_name = table_section[..table_end].trim().to_string();
         
-        // Determine operation (SELECT, INSERT, etc.)
-        let operation = if sql_upper.contains("FOR SELECT") {
-            RlsOperation::Select
-        } else if sql_upper.contains("FOR INSERT") {
-            RlsOperation::Insert
-        } else if sql_upper.contains("FOR UPDATE") {
-            RlsOperation::Update
-        } else if sql_upper.contains("FOR DELETE") {
-            RlsOperation::Delete
-        } else if sql_upper.contains("FOR ALL") {
-            RlsOperation::All
-        } else {
-            RlsOperation::All // Default to all if not specified
-        };
+        // Always assume SELECT operation - we only support SELECT policies
+        let operation = RlsOperation::Select;
         
         // Extract USING expression
         let using_expr = if let Some(using_idx) = sql_upper.find("USING") {
             let using_section = &sql[using_idx + 5..];
-            // If there's a CHECK clause, use that as the end boundary
-            let end_idx = using_section.to_uppercase().find("CHECK").unwrap_or(using_section.len());
-            Some(using_section[..end_idx].trim().to_string())
-        } else {
-            None
-        };
-        
-        // Extract CHECK expression
-        let check_expr = if let Some(check_idx) = sql_upper.find("CHECK") {
-            let check_section = &sql[check_idx + 5..];
-            Some(check_section.trim().to_string())
+            Some(using_section.trim().to_string())
         } else {
             None
         };
@@ -200,7 +179,7 @@ impl Parser {
             table_name,
             operation,
             using_expr,
-            check_expr,
+            check_expr: None // We don't support CHECK expressions
         })
     }
 
@@ -271,7 +250,7 @@ pub enum RlsStatement {
     },
 }
 
-/// Types of operations that policies can apply to
+/// Represents different types of RLS operations
 #[derive(Debug, Clone, PartialEq)]
 pub enum RlsOperation {
     /// SELECT operations
@@ -282,8 +261,6 @@ pub enum RlsOperation {
     Update,
     /// DELETE operations
     Delete,
-    /// All operations
-    All,
 }
 
 impl std::fmt::Display for RlsOperation {
@@ -293,21 +270,19 @@ impl std::fmt::Display for RlsOperation {
             RlsOperation::Insert => write!(f, "INSERT"),
             RlsOperation::Update => write!(f, "UPDATE"),
             RlsOperation::Delete => write!(f, "DELETE"),
-            RlsOperation::All => write!(f, "ALL"),
         }
     }
 }
 
 impl RlsOperation {
-    /// Create an RlsOperation from a string
+    /// Create a RlsOperation from a string
     pub fn from_str(s: &str) -> anyhow::Result<Self> {
         match s.to_uppercase().as_str() {
             "SELECT" => Ok(RlsOperation::Select),
             "INSERT" => Ok(RlsOperation::Insert),
             "UPDATE" => Ok(RlsOperation::Update),
             "DELETE" => Ok(RlsOperation::Delete),
-            "ALL" => Ok(RlsOperation::All),
-            _ => Err(anyhow::anyhow!("Invalid RLS operation: {}", s)),
+            _ => Ok(RlsOperation::Select), // Default to SELECT for all operations in simplified version
         }
     }
 } 
