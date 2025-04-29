@@ -21,6 +21,14 @@ pretty_assertions = "1.4.0"
 name = "libsql_rls"
 path = "src/lib.rs"
 
+[[bin]]
+name = "rls_repl"
+path = "rls_repl.rs"
+
+[[bin]]
+name = "test_with_rls"
+path = "test_with_rls.rs"
+
 [package.metadata]
 status = "proof-of-concept"
 notes = "This is a proof of concept that demonstrates the architectural approach to implementing Row Level Security in libSQL through AST manipulation." 
