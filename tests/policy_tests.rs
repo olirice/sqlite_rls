@@ -7,23 +7,9 @@ async fn test_create_policy_parsing() -> Result<()> {
     let db = Database::open_in_memory()?;
     let conn = db.connect()?;
     
-    // Initialize the policy table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS _rls_policies (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            schema_name TEXT,
-            table_name TEXT NOT NULL,
-            command TEXT NOT NULL,
-            using_expr TEXT,
-            check_expr TEXT,
-            UNIQUE(name, schema_name, table_name)
-        )",
-        params![],
-    ).await?;
-    
-    // Wrap the connection with RLS
-    let rls_conn = RlsConnection::new(conn);
+    // Wrap the connection with RLS and initialize it
+    // This will automatically create the policy table
+    let rls_conn = RlsConnection::new_initialized(conn).await?;
     
     // Test a basic CREATE POLICY statement directly through the wrapped connection
     let policy_sql = "CREATE POLICY user_policy ON users USING (user_id = current_user_id())";

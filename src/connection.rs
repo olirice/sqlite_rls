@@ -29,13 +29,54 @@ pub struct RlsConnection {
 }
 
 impl RlsConnection {
-    /// Create a new RLS connection wrapper
+    /// Create a new RLS connection wrapper, ensuring the _rls_policies table exists
     /// 
     /// # Arguments
     /// 
     /// * `conn` - The libSQL connection to wrap
+    /// 
+    /// # Returns
+    /// 
+    /// A new RLS connection with the policy table initialized
     pub fn new(conn: Connection) -> Self {
         Self { conn }
+    }
+    
+    /// Initialize the RLS system by creating the required tables
+    /// 
+    /// Call this after creating a new RlsConnection to ensure the policy
+    /// storage tables exist.
+    pub async fn initialize(&self) -> Result<()> {
+        // Create the policy table if it doesn't exist
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS _rls_policies (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                schema_name TEXT,
+                table_name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                using_expr TEXT,
+                check_expr TEXT,
+                UNIQUE(name, schema_name, table_name)
+            )",
+            params![],
+        ).await?;
+
+        Ok(())
+    }
+
+    /// Create a new RLS connection wrapper and initialize it
+    /// 
+    /// This is a convenience method that creates a new RlsConnection and
+    /// initializes the required tables.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `conn` - The libSQL connection to wrap
+    pub async fn new_initialized(conn: Connection) -> Result<Self> {
+        let rls_conn = Self::new(conn);
+        rls_conn.initialize().await?;
+        Ok(rls_conn)
     }
     
     /// Execute a SQL statement with RLS processing
@@ -54,6 +95,9 @@ impl RlsConnection {
     {
         // Check if it's a CREATE POLICY statement
         if let Some(captures) = CREATE_POLICY_REGEX.captures(sql) {
+            // Ensure the policy table exists
+            self.initialize().await?;
+
             // Parse the policy
             let policy_name = captures.get(1).map_or("", |m| m.as_str()).to_string();
             let table_ref = captures.get(2).map_or("", |m| m.as_str());
