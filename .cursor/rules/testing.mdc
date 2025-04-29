@@ -1,0 +1,29 @@
+# testing
+
+all tests should be written in rust using sql inputs + assertions
+
+## pattern
+
+```rust
+#[test]
+fn test_rls_filter_applies() {
+    let conn = setup_in_memory_db();
+
+    conn.execute_batch("
+        create table documents (id int, owner_id int);
+        insert into documents values (1, 42), (2, 99);
+
+        create policy on documents using (owner_id = 42);
+    ").unwrap();
+
+    let rows = conn.query("select id from documents", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 1);
+}
+
+## rules
+- each test must use a fresh in-memory db (e.g. file::memory:)
+- schema and data setup must happen inside the test body
+- use rust assertions to validate query output
+- do not assume any global state or prior setup
+- do not persist anything between tests
